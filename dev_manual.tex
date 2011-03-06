@@ -1,0 +1,467 @@
+\documentclass[10pt,a4paper]{book}
+\title{Ardour Development Manual}
+\author{Carl Hetherington}
+
+\newcommand{\todo}[1]{\textbf{XXX --- #1}}
+\newcommand{\code}[1]{\texttt{#1}}
+\usepackage{listings}
+\lstset{frame=single,language=c++,columns=fullflexible,basicstyle=\ttfamily,commentstyle=\footnotesize\textit,texcl=true,escapechar=\@,escapebegin=\footnotesize\itshape}
+\begin{document}
+\maketitle
+
+\chapter{Introduction}
+
+Welcome to Ardour!  This manual is intended to give guidance in
+Ardour's construction and how best to develop it.
+
+\section{Contacting other developers}
+
+By far the most useful means of communication with other Ardour users,
+testers and developers is via IRC.  Connect to
+\texttt{irc.freenode.org}, join the \texttt{\#ardour} channel and make
+yourself acquainted!
+
+\chapter{Code overview}
+
+The vast majority of Ardour is written in C++.  
+
+Ardour's code is split into several sections, which are summarised
+below by their location in the source tree.
+
+\begin{itemize}
+\item \code{gtk2\_ardour} --- the GUI front-end, written using GTK2.
+  GTK is accessed using gtkmm.
+\item \code{libs/ardour} --- the back-end.  This is a the UI-agnostic
+  `core' of Ardour, which can be used by different user interface
+  front-ends.  Currently, only the GTK2 interface is supported, but
+  once upon a time a keystroke-based interface to libardour also
+  existed.
+\item \code{libs/pbd} --- a library of useful miscellany.
+\item \code{libs/evoral} --- a library for managing lists of events of
+  various types, including automation and MIDI\@.
+\item \code{libs/surfaces} --- code to support hardware control
+  surfaces.
+\end{itemize}
+
+\chapter{The undo system}
+
+Ardour allows unlimited undo / redo, and saves the undo stack with its
+session.  This chapter describes how this is implemented.
+
+\section{Overview}
+
+The undo system employs similar principles to the way in which state
+is saved in sessions.  C++ object state, and changes to that state, is
+described with XML\@.  This has the advantage that it can easily be
+serialized to and restored from disc.
+
+There are two main approaches to saving undo state.  In some cases,
+undo is performed by taking the full state of an object before some
+operation, and then the full state afterwards, and storing both as
+XML\@.  Undo and redo can then be achieved simply by setting state to
+from the appropriate XML node.
+
+In some cases, however, this approach can be inefficient.  Consider,
+for example, a playlist with many thousands of regions.  If we want to
+represent a region's addition to the playlist, the `full state'
+approach means that we would take the state of all the regions both
+before and after the region add.  This in turn means that a very large
+`before' and `after' XML tree is required, which is inefficient both
+in terms of storage space and also computation to save and restore
+state.  For cases such as this, an alternative approach is taken: only
+the \emph{differences} in the `before' and `after' state are stored.
+In this way, rather than using a large state containing many regions,
+we consider only a small state containing information about the single
+added region.  This approach is much more efficient, and the cost of
+some increased implementation complexity.
+
+Classes that must be serialized to disc, and/or those that participate
+in undo, inherit from \code{PBD::Stateful}.
+
+\subsection{Commands}
+
+However a change in state is described, it is represented by some
+subclass of \code{PBD::Command}.  A change to some object represented
+by `before' and `after' state is described by a
+\code{PBD::MementoCommand}.  A change represented as a difference in
+state is represented by a \code{PBD::StatefulDiffCommand}.  Since some
+operation that is meaningful to the user may require changes to
+several different Ardour objects, commands can be grouped into a
+\code{PBD::UndoTransaction}.
+
+Consider, as an example, the movement of two regions that are on
+different tracks.  To the user, this is a single `move' operation.
+Internally, however, there is a change to two different playlists.
+Each playlist's change is described by a \code{StatefulDiffCommand},
+and these commands are collected into a single \code{UndoTransaction}
+which describes the operation that the user sees.
+
+The \code{Session} assists somewhat in creation of
+\code{UndoTransaction}s by keeping a `current' one
+(\code{\_current\_trans}) and providing the
+\code{begin\_reversible\_command} method to create a new
+\code{UndoTransaction}, the \code{add\_command} method to add a
+\code{Command} to the that \code{UndoTransaction}, and then the
+\code{commit\_reversible\_command} method to add the finished
+\code{UndoTransaction} to the history.
+
+
+\section{Full state undo / redo}
+
+
+
+\section{Properties}
+
+The most basic building block of the property-based undo system is the
+\code{PBD::Property}.  This is a templated class which manages a
+single piece of scalar state.  For example, \code{ARDOUR::Region}
+contains the definition:
+
+\begin{lstlisting}
+PBD::Property<framepos_t> _position;
+\end{lstlisting}
+
+This declares a \code{Property} of type \code{framepos\_t}.  This
+\code{\_position} can mostly be used as if it were a standard
+variable, but the use of the \code{Property} class means that
+\code{\_position} can also remember some history of previous values of
+the position.  At the end of the following sequence of code:
+
+\begin{lstlisting}
+_position = 4;
+_position->clear_changes ();
+_position = 9;
+\end{lstlisting}
+
+the \code{\_position} property knows that its current value is 9, but
+also that its previous value (before the last call to
+\code{clear\_changes}) was 4.
+
+\section{Stateful classes}
+
+Classes such as \code{ARDOUR::Region} which have \code{PBD::Property}
+members are derived from the class \code{PBD::Stateful}.  This helps
+in managing the properties of its subclass.
+
+\section{Example}
+
+Consider a \code{Region} class which looks something like this:
+
+\begin{lstlisting}
+class Region : public Stateful {
+    Property<framepos_t> _position;
+    Property<framepos_t> _length;
+};
+\end{lstlisting}
+
+and suppose we have an instance of this class called \code{region}
+whose properties are set so that $\code{\_position} = 1$ and
+$\code{\_position} = 2$.  We now want to change \code{\_position} and
+\code{\_length} in an undo-able fashion.
+
+\subsection{Making the changes}
+
+Here's what happens when we do to make the changes:
+
+\begin{lstlisting}
+region->clear_changes ();
+\end{lstlisting}
+
+\code{Stateful::clear\_changes} calls \code{Property::clear\_changes}
+on each of its properties (\code{\_position} and \code{\_length}).
+This means that \code{\_position} and \code{\_length} clear their
+\code{\_have\_old} flags.
+
+\begin{lstlisting}
+region->_position = 4;
+region->_length = 6;
+\end{lstlisting}
+
+The properties update their current values and note their old values,
+and the fact that they have been changed.
+
+\begin{lstlisting}
+session->add_command (new StatefulDiffCommand (region));
+\end{lstlisting}
+
+\chapter{Threading}
+
+Ardour runs multiple threads.  The main ones are as follows:
+
+\begin{itemize}
+\item \textit{GUI thread} --- where the GTK main loop runs.  All
+  GUI-related code \textit{must} execute in this thread.
+\item \textit{Process thread} --- code which that runs the JACK
+  process callback.  This is where audio processing is done.
+  Operations in this thread must not perform non-realtime operations
+  such as allocating memory, as these could easily cause audio
+  drop-outs.
+\item \textit{Metering thread} --- a thread which computes peak values
+  for meters based on the current fall-off settings.
+\item \textit{Peak thread}
+\end{itemize}
+
+
+\section{What the threads do}
+
+\subsection{Process thread}
+
+After some setup, the main body of the process thread is in
+\code{AudioEngine::process\_callback}.  This method is called when
+there audio / MIDI `work' to be done; typically it will be called when
+there are $N$ frames of audio available from JACK (where $N$ is the
+JACK block size).  This method takes the \textit{process lock},
+\code{AudioEngine::\_process\_lock} which is held throughout the
+callback.
+
+\todo{Detail about other threads}
+
+
+\section{Cross-thread signalling}
+
+Ardour makes much use of signal / slot messaging.  At its most basic
+level, this system allows some class \code{Fred} to expose some
+signal `Foo'.  Another class \code{Jim} can connect to
+\code{Fred::Foo}, such that when \code{Fred} emits `Foo', a method
+on \code{Jim} is called.  This is the system implemented by, for
+example, \code{libsigc++} as used by \code{gtkmm}.  The main
+conceptual advantage of this approach is that \code{Fred} need have
+no dependency on \code{Jim} at all, and furthermore that another
+class \code{Sheila} may also connect to the same signal, again
+without \code{Fred} being any the wiser.
+
+Using such a system across threads (so that, for example, the process
+thread can signal the GUI thread) has some complications, chief
+amongst which is that signal emissions from a given thread $A$ to $B$
+must not block thread $A$ while they await processing.
+
+\todo{Other reasons for all this carry-on}
+
+Ardour's code to handle cross-thread signalling is based on (and
+wraps) the \code{boost::signals2} library.
+
+\subsection{The \code{Signal} class}
+
+Ardour's basic `signal' class is \code{PBD::Signal}$N$, where $N$ is
+the number of parameters that the signal has.  Consider, for example,
+\code{PBD::Signal0}.  If a class \code{Fred} declares such a signal
+
+\begin{lstlisting}
+class Fred {
+  PBD::Signal0<void> Foo;
+};
+\end{lstlisting}
+
+then other classes can connect to the signal \code{Foo} using one of
+the members of \code{Signal0}.
+
+There are two main concerns with the connection of signals.  Consider
+the case where \code{Fred} emits a signal that \code{Jim} connects to.
+If \code{Jim} is destroyed, it is important that \code{Fred} stops
+attempting to deliver signals to it.  Also, care is needed if the code
+in \code{Jim} must be executed in a different thread to the one which
+emitted the signal.
+
+\subsubsection{Connection management}
+
+Connecting to a signal results in the creation of a `connection'
+object, represented in Ardour by \code{PBD::ScopedConnection}.  A
+\code{ScopedConnection} is created during connection of a signal, and
+its signal is disconnected when the \code{ScopedConnection} goes out
+of scope.  Ardour also provides the \code{ScopedConnectionList}, which
+a class can inherit from if it connects many signals.  The detailed
+use of these classes is discussed in the following sections.
+
+\subsubsection{Connecting to the same thread}
+
+If the connected code is to be executed in the same thread as the
+signal emission, connection is simple, so that:
+
+\begin{lstlisting}
+PBD::ScopedConnection c;
+foo.connect_same_thread (c, boost::bind (&Jim::bar, this));
+\end{lstlisting}
+
+or
+
+\begin{lstlisting}
+
+class Fred : public PBD::ScopedConnectionList {
+...
+};
+
+Fred cl;
+
+foo.connect_same_thread (cl, boost::bind (&Jim::bar, this));
+\end{lstlisting}
+
+will result in \code{Jim::bar} being called when \code{foo} is
+emitted.  The \code{connect\_same\_thread} method calls the boost
+library directly.
+
+The \code{c} and \code{cl} objects in the
+examples above are a \code{ScopedConnection} and a
+\code{ScopedConnectionList} respectively.  Details of the new
+connection are filled into the \code{ScopedConnection} or added to the
+\code{ScopedConnectionList}.
+
+The interaction of the signal and the connection are perhaps best
+illustrated with some code fragments:
+
+\begin{lstlisting}
+class Foo {
+public:
+  void fred () {
+    A ();
+  }
+
+  PBD::Signal0<void> A;
+};
+
+class Bar {
+public:
+  void Bar (Foo* f) {
+    f->A.connect_same_thread (
+        _connection, boost::bind (&Bar::sheila, this)
+      );
+  }
+
+  void sheila () {
+    ...
+  }
+};
+
+private:
+  PBD::ScopedConnection _connection;
+};
+
+Foo* f = new Foo;
+
+// Make a new Bar and its constructor will connect to Foo
+Bar* b = new Bar (f);
+
+// Foo::fred emits A, which results in Bar::sheila being called
+f->fred ();
+
+// Deleting b means that Bar::\_connection is also deleted, which
+// disconnects the connection made to Foo::A in Bar's constructor.
+delete b;
+
+// Foo::fred emits A as before, but no-one is listening!
+f->fred ();
+\end{lstlisting}
+
+If \code{Bar} is larger, and connects to more signals, it may be more
+convenient to modify the code above to:
+
+\begin{lstlisting}
+class Foo {
+public:
+  void fred () {
+    A ();
+  }
+
+  PBD::Signal0<void> A;
+};
+
+class Bar : public PBD::ScopedConnectionList {
+public:
+  void Bar (Foo* f) {
+    f->A.connect_same_thread (
+        *this, boost::bind (&Bar::sheila, this)
+      );
+  }
+
+  void sheila () {
+    ...
+  }
+};
+\end{lstlisting}
+
+In this case, the connection is stored in the parent
+\code{ScopedConnectionList} class, and disconnected when it is
+destroyed.  This approach requires less code in many cases.
+
+\subsubsection{Connecting to a different thread}
+
+In one case, the emission of signals from the back-end to a user
+interface (UI), it is necessary to have the signal handler running in
+a different thread to the emission.  Connecting signals in this way is
+quite similar to connecting same-thread signals, although the
+implementation is more complicated.
+
+Ardour has several components which it considers UI\@.  The most
+obvious, perhaps, is the graphical UI; other components are the Open
+Sound Control (OSC) interface, and also those provided by hardware
+control surfaces.
+
+In the Ardour code, each of these UIs inherits from \code{AbstractUI},
+which in turn is-a \code{BaseUI} which is-a \code{EventLoop}.
+
+
+
+\section{How signals get from disk to JACK outputs}
+
+[midi]
+
+Process thread: route / track calls diskstream::get\_playback, and then process\_output\_buffers on that.
+
+Diskstream::get\_playback reads from its ringbuffer.
+
+
+Butler thread: calls Track::do\_refill which in turn calls Diskstream::do\_refill
+
+MidiDiskstream::do\_refill calls MidiDiskstream::read which calls MidiPlaylist::read
+
+Assuming there's only 1 region, this calls Region::read\_at
+
+Which reads from its source, which gets from the model, if there is one, or gets direct from the SMF.
+
+
+
+%%%
+
+CrossThreadPool: is-a Pool.
+
+PerThreadPool: manages a CrossThreadPool per thread.  create\_per\_thread\_pool
+called by SessionEvent::create\_per\_thread\-pool
+
+
+---
+
+The x-thread signalling problem is that we want signals from one thread to be catchable
+by other threads.
+
+In practice this means signalling from A Thread to one of the `UI' threads (GUI, OSC, MIDI).
+
+
+
+
+SignalN: wrapper for boost::signals2::signal<>
+
+ScopedConnection == boost::signals2::scoped\_connection
+UnscopedConnection == boost::signals2::connection
+
+Methods:
+connect\_same\_thread: directly connect to boost signal.
+connect: connects boost signal to EventLoop::call\_slot; on boost signal emission, call\_slot
+does the cross-thread signalling voodoo via AbstractUI.
+
+AbstractUI is-a BaseUI is-a EventLoop; used by OSC, MIDI, GUI
+
+invalidation:
+
+Connect a signal on B to A with something like
+
+B->Signal.connect (x, invalidator (*this), boost::bind (...), gui\_context());
+
+If A is a sigc::trackable, when it is destroyed we want to make sure that
+A is not called when the signal on B happens.  The invalidator does this.
+
+
+
+
+
+%%%
+
+\end{document}
