@@ -156,7 +156,7 @@ class Region : public Stateful {
 
 and suppose we have an instance of this class called \code{region}
 whose properties are set so that $\code{\_position} = 1$ and
-$\code{\_position} = 2$.  We now want to change \code{\_position} and
+$\code{\_length} = 2$.  We now want to change \code{\_position} and
 \code{\_length} in an undo-able fashion.
 
 \subsection{Making the changes}
@@ -459,9 +459,32 @@ If A is a sigc::trackable, when it is destroyed we want to make sure that
 A is not called when the signal on B happens.  The invalidator does this.
 
 
-
-
-
 %%%
+
+
+\chapter{Export}
+
+Ardour's export facilities are comprehensive, and the code that
+implements them is rather complex.  This chapter describes that export code.
+
+\section{Capabilities}
+
+Export has a number of parameters.  To summarise, these are:
+
+\begin{itemize}
+\item \textbf{Format}
+  \begin{itemize}
+  \item File format (AIFF, WAV, Ogg Vorbis etc.)
+  \item Sample rate.
+  \item Type of sample rate conversion, if required.
+  \item Normalization
+  \item Trimming of silence.
+  \item Bit depth.
+  \item Type of dithering, if required.
+  \end{itemize}
+\item \textbf{Exported file locations and names}; where to put the exported files and what to call them.
+\item \textbf{Time ranges} to export.
+\item \textbf{Tracks and/or busses} to export.
+\end{itemize}
 
 \end{document}
