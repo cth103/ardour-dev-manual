@@ -487,4 +487,24 @@ Export has a number of parameters.  To summarise, these are:
 \item \textbf{Tracks and/or busses} to export.
 \end{itemize}
 
+
+
+Export Formats
+
+Described by subclass of ExportFormat.  Subclasses are:
+
+ExportFormatLinear : AIFF, AU, IRCAM, WAV, W64, RAW.
+ExportFormatOggVorbis
+ExportFormatFLAC
+ExportFormatBWF
+
+ExportFormatBase 
+
+This is:
+ format id (F\_WAV, F\_W64, F\_AIFF, F\_AU, F\_IRCAM, F\_RAW, F\_FLAC, F\_Ogg)
+ quality (LosslessLinear, LosslessCompression, LossyCompression)
+ sample format (8-bit, 16-bit, 24-bit, 32-bit, U8, float, double, Vorbis)
+
+
+
 \end{document}
