@@ -108,9 +108,55 @@ The \code{Session} assists somewhat in creation of
 
 \section{Full state undo / redo}
 
+In many cases, undo is achieved by keeping the entire state of an
+object before some operation, then undoing it by setting that object
+back to its pre-operation state.
+
+The following is an example of how this is done:
+
+\begin{lstlisting}
+Object* foo;
+
+// ...
+
+// Tell the session that we are starting an undo-able operation
+session->begin_reversible_command ("some operation");
+// Obtain the state of the object foo now
+XMLNode& before (object->get_state ());
+// Do some operation which changes the state of foo
+foo->some_operation ();
+// Obtain the new state of foo after the operation
+XMLNode& after (object->get_state ());
+// Add a command to represent this change in state
+session->add_command (
+	new MementoCommand<Object> (*foo, &before, &after)
+        );
+// Commit any commands that have been added since
+// begin\_reversible\_command as an undo transaction
+session->commit_reversible_command ();
+\end{lstlisting}
+
+A single undo transaction is wrapped in calls to
+\code{begin\_reversible\_command} and
+\code{commit\_reversible\_command}.  Between these two calls, any
+number of \code{Command} objects may be added to the undo transaction,
+and they will all be undone as a single unit.
+
+In this case, the \code{Command} is \code{MementoCommand}.  This is a
+relatively simple class; it takes before and after XML state of an
+object and keeps it with a pointer to the target object.  Undo is a
+matter of calling \code{set\_state} on the object with the old state,
+and redo calls \code{set\_state} with the new state.
+
+\section{Diff-state (property-based) undo / redo}
+
+This section describes undo / redo when it done using differences in
+object state, rather than storing entire before and after states (much
+of which may not have changed).  This can be more efficient in many
+cases.
 
 
-\section{Properties}
+\subsection{Properties}
 
 The most basic building block of the property-based undo system is the
 \code{PBD::Property}.  This is a templated class which manages a
@@ -137,7 +183,7 @@ the \code{\_position} property knows that its current value is 9, but
 also that its previous value (before the last call to
 \code{clear\_changes}) was 4.
 
-\section{Stateful classes}
+\subsection{Stateful classes}
 
 Classes such as \code{ARDOUR::Region} which have \code{PBD::Property}
 members are derived from the class \code{PBD::Stateful}.  This helps
@@ -183,6 +229,79 @@ and the fact that they have been changed.
 \begin{lstlisting}
 session->add_command (new StatefulDiffCommand (region));
 \end{lstlisting}
+
+Finally we add a \code{StatefulDiffCommand} for the region that we
+operated on.  This runs through the \code{Property} objects that the
+region has, and asks each one if has changed; if so the before- and
+after- change values are noted in the \code{StatefulDiffCommand}.
+
+
+\subsection{Sequence properties}
+
+So far we have discussed diff-based undo / redo with simple scalar
+properties.  Things get a little more complicated when we deal with
+properties which themselves are lists of other \code{Stateful} items.
+
+A typical example of this is Ardour's \emph{playlist}.  The playlist's
+main piece of state is a list of regions, which themselves are
+\emph{Stateful} objects.  We often want to be able to undo changes to
+the contents of the list; ie things like addition or removal of
+regions to or from the list.  Situations like this are particularly
+well matched to the diff-based undo system; if there are 1000 regions
+and we want to undo the addition of a single region, the diff-based
+undo allows us to note details of just the one region, rather than the
+1000 regions before and 1001 regions after.
+
+A \code{SequenceProperty} is a subclass of \code{Property} which has a
+container of objects.  It is templated on the container type, which
+will typically be some STL class such as \code{vector} or \code{list}.
+\code{SequenceProperty} can be used much like the container that it
+wraps; it provides shim methods for things like addition, removal and
+insertion of objects.  When these operations are performed,
+\code{SequenceProperty} makes notes of the changes that have occurred,
+much as \code{Property} does for its scalar state value.
+
+Writing an undo record for a \code{SequenceProperty} is performed just
+like that for any other \code{Property}.  Such undo records will
+detail changes to the \emph{list} that the \code{SequenceProperty}
+holds.  They will \emph{not}, by default, include details of any
+changes to the items \emph{held} by the \code{SequenceProperty}.  Such
+changes can, however, be included explicitly.  Consider some playlist,
+whose constituent regions are to be changed by some operation.  We can
+set up an undo record like this:
+
+\begin{lstlisting}
+playlist->clear_owned_changes ();
+playlist->some_operation ();
+vector<Command*> cmds;
+playlist->rdiff (cmds);
+session->add_commands (cmds);
+\end{lstlisting}
+
+Here we first see a call to \code{clear\_owned\_changes}, which is
+similar to the usual call to \code{clear\_changes}, except that it
+clears changes for the members of any \code{SequenceProperty} that
+playlist contains.  In this case, \code{clear\_changes} will be called
+for each region in the playlist.  \code{some\_operation} then
+proceeds, perhaps making changes to the regions' state.  The call to
+\code{rdiff} on the playlist collects \code{StatefulDiffCommand}s for
+changes to any members of any of playlist's sequence properties (in
+this case, changes to the regions}.  These commands can then be added
+to the session's undo stack in the usual way (there is a convenience
+function \code{add\_commands} which adds multiple commands at the
+same time.
+
+Note that this code snippet does not consider any changes to the state
+of playlist itself; if \code{some\_operation} may cause such changes,
+the standard \code{clear\_changes}
+
+\begin{lstlisting}
+session->add_command (new StatefulDiffCommand (playlist));
+\end{lstlisting}
+
+must \emph{also} be carried out to store this state.
+
+
 
 \chapter{Threading}
 
@@ -429,12 +548,6 @@ called by SessionEvent::create\_per\_thread\-pool
 
 ---
 
-The x-thread signalling problem is that we want signals from one thread to be catchable
-by other threads.
-
-In practice this means signalling from A Thread to one of the `UI' threads (GUI, OSC, MIDI).
-
-
 
 
 SignalN: wrapper for boost::signals2::signal<>
@@ -461,6 +574,50 @@ A is not called when the signal on B happens.  The invalidator does this.
 
 %%%
 
+
+\chapter{The process thread}
+
+When JACK asks us to do stuff, we run the process thread.  This is a
+bit of a confusing name, as audio/MIDI processing is handled by
+multiple threads.
+
+\section{Example session}
+
+We have tracks $T_1$ and $T_2$ and busses $B_1$, $B_2$ and $B_3$.  All
+busses feed $M$.  $T_1$ feeds $B_1$, $T_2$ feeds $B_2$, $B_2$ feeds
+$B_3$.
+
+% drawing!
+
+\section{The route graph}
+
+\subsection{Route fed-by sort}
+
+Setup done by \code{Graph::rechain}.  This is passed a list of routes
+in order from beginning to end of the chain, so for our example it is:
+
+\begin{itemize}
+\item $A_1$
+\item $A_2$
+\item $B_1$
+\item $B_2$
+\item $B_3$
+\item $M$
+\end{itemize}
+
+ie anything that feeds something else is before it in the list.
+
+\subsection{Graph setup}
+
+We make a list \code{\_nodes\_rt} that is a list of routes.
+
+Then for each node (ie route):
+
+\begin{itemize}
+\item Set \code{has\_output} to true if it feeds anything.
+\item Set \code{has\_input} to true if it is fed by anything.
+\item Add any route that we directly feed to \code{\_activation\_chain}.
+\end{itemize}
 
 \chapter{Export}
 
