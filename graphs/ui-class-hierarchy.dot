@@ -1,0 +1,16 @@
+digraph {
+	EventLoop [shape=box] [texlbl="\small\code{EventLoop}"]
+	BaseUI [shape=box] [texlbl="\small\code{BaseUI}"]
+	AbstractUI [shape=box] [texlbl="\small\code{AbstractUI}"]
+	Gtkmm2extUI [shape=box] [texlbl="\small\code{Gtkmm2ext::UI}"]
+	MackieControlProtocol [shape=box] [texlbl="\small\code{MackieControlProtocol}"]
+	OSC [shape=box] [texlbl="\small\code{OSC}"]
+	MidiControlUI [shape=box] [texlbl="\small\code{MidiControlUI}"]
+
+	EventLoop -> BaseUI
+	BaseUI -> AbstractUI
+	AbstractUI -> Gtkmm2extUI
+	AbstractUI -> MackieControlProtocol
+	AbstractUI -> OSC
+	AbstractUI -> MidiControlUI
+}

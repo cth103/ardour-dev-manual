@@ -1,13 +1,15 @@
 \documentclass[10pt,a4paper]{book}
+\usepackage{listings,graphicx,tikz,titlepic}
+
 \title{Ardour Development Manual}
+\titlepic{\includegraphics{graphics/ardour_bw.pdf}}
 \author{}
 
 \newcommand{\todo}[1]{\textbf{XXX --- #1}}
 \newcommand{\code}[1]{\texttt{#1}}
-\usepackage{listings,graphicx}
 \lstset{frame=single,language=c++,columns=fullflexible,basicstyle=\ttfamily,commentstyle=\footnotesize\textit,texcl=true,escapechar=\@,escapebegin=\footnotesize\itshape}
 \begin{document}
-%\maketitle
+\maketitle
 
 \clearpage
 \thispagestyle{empty}
@@ -17,20 +19,44 @@
 \bigskip
 
 \begin{quote}
-\emph{``There is a theory which states that if ever anybody discovers exactly what the Universe is for and why it is here, it will instantly disappear and be replaced by something even more bizarrely inexplicable. There is another theory which states that this has already happened.''} --- Douglas Adams, `The Hitch-hikers' Guide to the Galaxy'
+
+\emph{``There is a theory which states that if ever anyone discovers
+  exactly what the Universe is for, and why it is here, it will
+  instantly disappear and be replaced by something even more bizarrely
+  inexplicable.}
+
+\smallskip
+
+\emph{There is another theory which states that this has
+  already happened.}
+
+\smallskip
+
+\emph{There is yet a third theory which suggests that
+  both of the first two theories were concocted by a wily editor of
+  `The Hitch-hikers' Guide to the Galaxy' in order to increase the
+  level of universal uncertainty and paranoia, and so boost the sales
+  of the guide.  This last theory is of course the most convincing,
+  because `The Hitch-hikers' Guide to the Galaxy' is the only book in
+  the whole of the known universe to have the words `don't panic'
+  inscribed in large, friendly letters on the cover.''}
+
+\smallskip
+
+--- Douglas Adams, `The Hitch-hikers' Guide to the Galaxy'
 \end{quote}
 
 \chapter{Introduction}
 
-%Welcome to Ardour!  This manual is intended to give guidance in
-%Ardour's construction and how best to develop it.
+Welcome to Ardour!  This manual is intended to give guidance in
+Ardour's construction and how best to develop it.
 
-%\section{Contacting other developers}
+\section{Contacting other developers}
 
-%By far the most useful means of communication with other Ardour users,
-%testers and developers is via IRC.  Connect to
-%\texttt{irc.freenode.org}, join the \texttt{\#ardour} channel and make
-%yourself acquainted!
+By far the most useful means of communication with other Ardour users,
+testers and developers is via IRC.  Connect to
+\texttt{irc.freenode.org}, join the \texttt{\#ardour} channel and make
+yourself acquainted!
 
 \chapter{Code overview}
 
@@ -133,11 +159,11 @@ Object* foo;
 // Tell the session that we are starting an undo-able operation
 session->begin_reversible_command ("some operation");
 // Obtain the state of the object foo now
-XMLNode& before (object->get_state ());
+XMLNode& before (foo->get_state ());
 // Do some operation which changes the state of foo
 foo->some_operation ();
 // Obtain the new state of foo after the operation
-XMLNode& after (object->get_state ());
+XMLNode& after (foo->get_state ());
 // Add a command to represent this change in state
 session->add_command (
 	new MementoCommand<Object> (*foo, &before, &after)
@@ -243,7 +269,7 @@ session->add_command (new StatefulDiffCommand (region));
 
 Finally we add a \code{StatefulDiffCommand} for the region that we
 operated on.  This runs through the \code{Property} objects that the
-region has, and asks each one if has changed; if so the before- and
+region has, and asks each one if it has changed; if so the before- and
 after- change values are noted in the \code{StatefulDiffCommand}.
 
 
@@ -304,9 +330,11 @@ same time.
 
 Note that this code snippet does not consider any changes to the state
 of playlist itself; if \code{some\_operation} may cause such changes,
-the standard \code{clear\_changes}
+the standard
 
 \begin{lstlisting}
+playlist->clear\_changes ();
+playlist->some\_operation ();
 session->add_command (new StatefulDiffCommand (playlist));
 \end{lstlisting}
 
@@ -328,11 +356,16 @@ Ardour runs multiple threads.  The main ones are as follows:
   drop-outs.
 \item \textit{Metering thread} --- a thread which computes peak values
   for meters based on the current fall-off settings.
-\item \textit{Peak thread}
 \end{itemize}
 
 
 \section{What the threads do}
+
+\subsection{The GUI thread}
+
+This runs the main GUI using GTK\@.  Any GUI-related or GTK call must
+happen in this thread.  Long-running operations should not be carried
+out in this thread, as blocking it will stop the GUI from responding.
 
 \subsection{Process thread}
 
@@ -343,8 +376,6 @@ there are $N$ frames of audio available from JACK (where $N$ is the
 JACK block size).  This method takes the \textit{process lock},
 \code{AudioEngine::\_process\_lock} which is held throughout the
 callback.
-
-\todo{Detail about other threads}
 
 
 \section{Cross-thread signalling}
@@ -363,9 +394,8 @@ without \code{Fred} being any the wiser.
 Using such a system across threads (so that, for example, the process
 thread can signal the GUI thread) has some complications, chief
 amongst which is that signal emissions from a given thread $A$ to $B$
-must not block thread $A$ while they await processing.
-
-\todo{Other reasons for all this carry-on}
+must not block thread $A$ while they await processing.  In addition,
+emission of signals from a process thread must be real-time safe.
 
 Ardour's code to handle cross-thread signalling is based on (and
 wraps) the \code{boost::signals2} library.
@@ -526,9 +556,162 @@ Sound Control (OSC) interface, and also those provided by hardware
 control surfaces.
 
 In the Ardour code, each of these UIs inherits from \code{AbstractUI},
-which in turn is-a \code{BaseUI} which is-a \code{EventLoop}.
+which in turn is-a \code{BaseUI} which is-a \code{EventLoop}, as shown
+in Figure~\ref{fig:ui-class-hierarchy}.
+
+\begin{figure}[ht]
+\begin{center}
+\include{graphs/ui-class-hierarchy}
+\end{center}
+\caption{The class hierarchy for UI classes}
+\label{fig:ui-class-hierarchy}
+\end{figure}
+
+Consider first how the Ardour code sets up a connection to a signal
+which is emitted in one thread and responded to in another.  In the previous
+listing from the single-threaded case, the code to make the connection is
+
+\begin{lstlisting}
+    f->A.connect_same_thread (
+        _connection, boost::bind (&Bar::sheila, this)
+      );
+\end{lstlisting}
+
+This connects \code{Bar::sheila} to a signal \code{A} on the object
+\code{f}.  When \code{A} is emitted, \code{Bar::sheila} will be run in the
+thread from which \code{A} was emitted.
+
+In the case where \code{A} is emitted in a non-UI thread, and must be
+handled by code in a UI thread, the connection code must be modified as
+follows:
+
+\begin{lstlisting}
+    f->A.connect (
+        _connection, invalidator (), boost::bind (&Bar::sheila, this), gui_thread ()
+      );
+\end{lstlisting}
+
+As before, we have a \code{\_connection} object to hold details of the connection, and
+a \code{boost::bind} to the function that must be called on signal emission.  There
+are two additions; an `invalidator', and an indication of the thread that \code{Bar::sheila}
+must be called in.  These extra parts will be discussed shortly.
+
+\subsubsection{The mechanics of cross-thread signalling}
+
+In the single-threaded case, Ardour simply connects the signal to the slot using the Boost
+library's mechanisms.  On emission of the signal, the slots are called directly.
+
+In the multi-threaded case, consider the case where some back-end
+thread $A$ raises a signal that some UI thread $B$ needs to respond to.
+
+\begin{enumerate}
+\item Ardour connects the signal to \code{EventLoop::call\_slot} on
+  the receiving \code{EventLoop}.  This is a pure virtual method
+  implemented by \code{AbstractUI}.  Hence when the signal is emitted
+  in thread $A$, \code{AbstractUI::call\_slot} is called in $A$.
+\item \code{AbstractUI::call\_slot} obtains a \code{RequestObject} by
+  calling \code{AbstractUI::get\_request}.
+\begin{enumerate}
+\item \code{AbstractUI::get\_request} checks to see if thread $A$ has
+  a per-thread request buffer (a ring-buffer set up by
+  \code{AbstractUI::register\_thread}).
+\item If so, \code{get\_request} returns the next available write
+  space in the per-thread buffer; otherwise it returns a
+  \code{RequestObject} allocated by \code{new}.
+\end{enumerate}
+\item \code{AbstractUI::call\_slot} sets up the \code{RequestObject}
+  with details of the slot that is to be called, and passes it to
+  \code{AbstractUI::send\_request}.
+\item If thread $A$ has a per-thread request buffer, the write pointer
+  on the ringbuffer is incremented to `commit' the
+  \code{RequestObject} to the buffer; otherwise the
+  \code{RequestObject} is written to \code{AbstractUI::request\_list}.
+\item \code{BaseUI::request\_channel} is signalled to indicate that a
+  request is waiting.
+\end{enumerate}
+
+Now, in thread $B$:
+
+\begin{enumerate}
+\item \code{BaseUI::request\_channel} calls \code{BaseUI::request\_handler}.
+\item This calls \code{AbstractUI::handle\_ui\_requests}.
+\item This looks in each of its request buffers (there will be one for
+  each thread which called \code{AbstractUI::register\_thread}) and calls the requested slots.
+\item It then looks in the \code{AbstractUI::request\_list} and calls those slots.
+\end{enumerate}
 
 
+\subsubsection{Invalidation}
+
+Consider the case where an object \code{f} of class \code{Fred} has a
+cross-thread connection to a signal on some object \code{j}.  Should
+\code{f} connect to \code{j} and subsequently be destroyed, the
+aforementioned \code{ScopedConnection} or \code{ScopedConnectionList}
+would typically also be destroyed, removing the connection.  There is
+a complication, however, in the cross-thread case due to the
+disconnect between the signal being emitted and handled.  Consider the
+following pathological case:
+
+\begin{enumerate}
+\item Object \code{f} of class \code{Fred} connects to some signal on some object \code{j}.
+\item \code{j} emits the signal; a \code{RequestObject} gets queued up.
+\item \code{f} is destroyed; the connection between \code{f} and
+  \code{j} is removed, but alas too late.
+\item The \code{RequestObject} gets processed by the event loop of the
+  UI that \code{f}'s signal handler runs in; this results in some
+  method being called on \code{f}.
+\item \code{f} has been destroyed, so bad things happen.
+\end{enumerate}
+
+To deal with this problem, a cross-thread connection is supplied with
+an \emph{invalidation record}.  This is an object of type
+\code{PBD::InvalidationRecord} which is usually created by a helper
+function such as \code{Gtkmm2ext::\_\_invalidator} (wrapped in the macro
+\code{invalidator()}).
+
+The \code{InvalidationRecord} is kept in the \code{RequestObject}.
+The \code{Gtkmm2ext::\_\_invalidator} connects to a given
+\code{sigc::trackable}'s \code{add\_destroy\_notify\_callback} and
+calls \code{EventLoop::invalidate\_request} on receipt.  For our
+example, this means that when \code{f} is destroyed the UI's
+\code{EventLoop::invalidate\_request} is called.  This in turn sets
+all \code{RequestObject}s for this \code{InvalidationRecord} to be
+invalid, so that they are not called.
+
+In other words, the following sequence occurs:
+\begin{enumerate}
+
+\item We make a connection using something like
+\begin{lstlisting}
+void Fred::frobozz () {
+  j.foo.connect (
+    _c, invalidator (*this),
+    bind (&Fred::bar, this), gui_thread ());
+}
+\end{lstlisting}
+\begin{enumerate}
+\item \code{invalidator()} (ie \code{Gtkmm2ext::\_\_invalidator}) creates an \code{InvalidationRecord}.
+\item \code{j.foo} is attached to \code{EventLoop::call\_slot}
+\end{enumerate}
+
+\item \code{j.foo} is emitted.
+\begin{enumerate}
+\item \code{EventLoop::call\_slot} is called.
+\item A \code{RequestObject} is made, and the \code{InvaldationRecord} is made to point to it.
+\item The \code{RequestObject} is put into the request buffer.
+\end{enumerate}
+
+\item The object of type \code{Fred} is deleted.
+\begin{enumerate}
+\item \code{EventLoop::invalidate\_request} is called via \code{Fred}'s \code{sigc::trackable} base's \code{destroy\_notify\_callback}.
+\item This marks the \code{RequestObject} as invalid.
+\end{enumerate}
+
+\item When \code{j}'s event loop runs, the \code{RequestObject} is
+  ignored as it has been marked invalid; the destroyed \code{Fred}
+  object is not called, and all is well.
+
+\end{enumerate}
 
 \section{How signals get from disk to JACK outputs}
 
@@ -556,41 +739,17 @@ CrossThreadPool: is-a Pool.
 PerThreadPool: manages a CrossThreadPool per thread.  create\_per\_thread\_pool
 called by SessionEvent::create\_per\_thread\-pool
 
-
 ---
-
-
-
-SignalN: wrapper for boost::signals2::signal<>
-
-ScopedConnection == boost::signals2::scoped\_connection
-UnscopedConnection == boost::signals2::connection
-
-Methods:
-connect\_same\_thread: directly connect to boost signal.
-connect: connects boost signal to EventLoop::call\_slot; on boost signal emission, call\_slot
-does the cross-thread signalling voodoo via AbstractUI.
-
-AbstractUI is-a BaseUI is-a EventLoop; used by OSC, MIDI, GUI
-
-invalidation:
-
-Connect a signal on B to A with something like
-
-B->Signal.connect (x, invalidator (*this), boost::bind (...), gui\_context());
-
-If A is a sigc::trackable, when it is destroyed we want to make sure that
-A is not called when the signal on B happens.  The invalidator does this.
-
 
 %%%
 
 
 \chapter{The process thread}
 
-When JACK asks us to do stuff, we run the process thread.  This is a
-bit of a confusing name, as audio/MIDI processing is handled by
-multiple threads.
+When JACK asks us to do stuff, we run the process thread.  The
+singular `thread' in its name is somewhat historic, as newer version
+of Ardour (3 and beyond) support multi-threaded processing.  This
+allows Ardour to take advantage of multi-core CPUs.
 
 \section{Example session}
 
