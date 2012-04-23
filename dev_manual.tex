@@ -58,7 +58,9 @@ testers and developers is via IRC.  Connect to
 \texttt{irc.freenode.org}, join the \texttt{\#ardour} channel and make
 yourself acquainted!
 
-\chapter{Code overview}
+\chapter{Overview and basic contents}
+
+\section{The code}
 
 The vast majority of Ardour is written in C++.  
 
@@ -79,6 +81,147 @@ below by their location in the source tree.
 \item \code{libs/surfaces} --- code to support hardware control
   surfaces.
 \end{itemize}
+
+
+\section{Time}
+
+\begin{quote}
+\emph{``Reason notwithstanding, the universe continues unabated.  Its
+  history is terribly long and awfully difficult to understand, even
+  in its simpler moments which are, roughly speaking, the beginning
+  and the end.  The wave harmonic theory of historical perception, in
+  its simplest form, states that history is an illusion caused by the
+  passage of time, and that time is an illusion caused by the passage
+  of history.  It also states that ones perception of these illusions
+  is conditioned by three important factors: who you are, where you
+  are, and when you last had lunch with Zaphod Beeblebrox.''} ---
+Douglas Adams, `The Hitch-hikers' Guide to the Galaxy'
+
+\medskip
+
+\emph{``Tempora mutantur et nos mutamur in illis''} --- Lothair I (attr.)
+\end{quote}
+
+\subsection{Expressions of time intervals}
+
+Ardour has a couple of ways of representing an interval of time, and
+some mechanisms to convert between the two representations.
+
+The first is the \emph{frame}.  This is a period of time equal to
+$1/F_S$, where $F_S$ is the sampling rate of the session.  Life is
+simple with the frame, as its duration is constant throughout the
+timeline. 
+
+There is also the more complicated \emph{beat}.  This is defined
+within Ardour as a unit of time that is related to tempo, such that a
+beat length $b$ in seconds is given by
+
+\begin{equation}
+b = \frac{60}{T}
+\end{equation}
+
+where $T$ is the tempo in beats per minute.  The tempo of a session
+can change multiple times within a session.  This means that, for
+example, a period of $B$ beats in one part of the session may
+correspond to a different number of seconds depending on whereabouts
+the period is within the session.
+
+Finally, some positions are expressed as a number of bars, beats and
+ticks.  Such positions are dependent on both time signature and
+tempo.
+
+
+\subsection{Durations, offsets and session positions}
+
+Many confusions and bugs arise from misunderstandings of times
+represented as intervals from some reference point.  There are a few
+common situations within Ardour:
+
+\begin{itemize}
+\item \emph{Session frames} --- it is common to express some time as
+  an interval in frames from the start of the session (i.e.\ $0$ on
+  the timeline, the leftmost point in the editor, not the session
+  `start' location marker).  The intention is to use the type
+  \code{framepos\_t} for such times.  Comments often refer to times
+  like this as being in `session frames'.
+\item \emph{Region-offset positions} --- it is also common to express
+  things as being at some time within a region.  This usually means
+  that the `position' is an interval from the \emph{position} property
+  of the region, which in itself is stored in session frames.
+\item \emph{Source-offset positions} --- since a region can start at
+  any point within its source, it is also fairly common to express
+  times as being offset from the start of a region's source.
+\end{itemize}
+
+Figure~\ref{fig:times-with-regions} is an attempt to clarify some of
+these ideas.  Consider this region, thinking of all time intervals as
+being in frames.
+
+\begin{figure}[ht]
+\begin{center}
+\includegraphics{diagrams/times_with_regions.pdf}
+\end{center}
+\caption{Some expressions of times within Ardour}
+\label{fig:times-with-regions}
+\end{figure}
+
+The figure shows a thick black line to represent session $0$.  We then
+have some event `Fred', whose time can be expressed most simply in
+\emph{session frames} as $f$.  We then have a region, coloured in
+blue.  This has a \emph{position} property, expressed in session
+frames as $p$.  Its source is coloured grey, and we can see that this
+region starts at an interval $s$ into its source (so that the region's
+\emph{start} property is $s$).  If `Fred' is in some way related to
+  this region, we can express its time in new ways: as an offset from
+  the region position, $g$, or as an offset from the source start,
+  $h$.
+
+It goes without saying that confusing any of these representations of
+where `Fred' is will cause problems.
+
+
+\subsection{Bars, beats and ticks}
+
+Expression of positions and durations in terms of frames means that
+things will not be affected by tempo.  In some cases, it is useful to
+express things in terms of musical units so that, for example, an
+event at the start of bar~3 will remain at the start of bar~3 even if
+the tempo or time signature is changed.
+
+`Musical' representations of time are most commonly used with MIDI
+data, but other things in Ardour can be `glued' to musical time at the
+option of the user.
+
+There are two distinct musical representations used within Ardour
+\begin{itemize}
+\item fractional beats --- independent of time signature but dependent on tempo
+\item bar/beat/tick (often abbreviated to BBT) --- dependent on both time signature and tempo
+\end{itemize}
+
+
+\subsubsection{Fractional beats}
+
+The position and duration of MIDI notes and other events is expressed
+as a fractional number of beats.  Conversion between beats and frames
+is performed using the \code{ARDOUR::BeatsFramesConverter} class.
+Given a tempo map (an expression of what tempo and time signature
+changes occur in a session), the \code{BeatsFramesConverter} can
+convert a distance in beats or frames from some origin position into a
+distance in the opposite unit.  The equivalent frame count for a
+quantity of fractional beats is a function \emph{only} of tempo, not
+of time signature.
+
+
+\subsubsection{Bar/beat/tick}
+
+Some other positions and durations are expressed as a number of bars,
+beats and ticks.  As with western musical notation, beats are a
+subdivision of bars (and there may be any number of beats per bar) and
+ticks are a subdivision of beats (where there is a constant number of
+ticks per beat).
+
+
+
 
 \chapter{The undo system}
 
@@ -831,92 +974,6 @@ This is:
  format id (F\_WAV, F\_W64, F\_AIFF, F\_AU, F\_IRCAM, F\_RAW, F\_FLAC, F\_Ogg)
  quality (LosslessLinear, LosslessCompression, LossyCompression)
  sample format (8-bit, 16-bit, 24-bit, 32-bit, U8, float, double, Vorbis)
-
-
-\chapter{Miscellany}
-
-\section{Time}
-
-\begin{quote}
-\emph{``Time is an illusion caused by the passage of history; history is an illusion caused by the passage of time.'', Douglas Adams}
-
-\medskip
-
-\emph{``Tempora mutantur et nos mutamur in illis'', Lothair I (attr.)}
-\end{quote}
-
-\subsection{Expressions of time intervals}
-
-Ardour has a couple of ways of representing an interval of time, and
-some mechanisms to convert between the two representations.
-
-The first is the \emph{frame}.  This is a period of time equal to
-$1/F_S$, where $F_S$ is the sampling rate of the session.  Life is
-simple with the frame, as its duration is constant throughout the
-timeline. 
-
-There is also the more complicated \emph{beat}.  This is defined
-within Ardour as a unit of time that is related to tempo, such that a
-beat length $b$ in seconds is given by
-
-\begin{equation}
-b = \frac{60}{T}
-\end{equation}
-
-where $T$ is the tempo in beats per minute.  The tempo of a session
-can change multiple times within a session.  This means that, for
-example, a period of $B$ beats in one part of the session may
-correspond to a different number of seconds depending on whereabouts
-the period is within the session.
-
-
-\subsection{Durations, offsets and session positions}
-
-Many confusions and bugs arise from misunderstandings of times
-represented as intervals from some reference point.  There are a few common situations within Ardour:
-
-\begin{itemize}
-\item \emph{Session frames} --- it is common to express some time as
-  an interval in frames from the start of the session (i.e.\ $0$ on
-  the timeline, the leftmost point in the editor, not the session
-  `start' location marker).  The intention is to use the type
-  \code{framepos\_t} for such times.  Comments often refer to times
-  like this as being in `session frames'.
-\item \emph{Region-offset positions} --- it is also common to express
-  things as being at some time within a region.  This usually means
-  that the `position' is an interval from the \emph{position} property
-  of the region, which in itself is stored in session frames.
-\item \emph{Source-offset positions} --- since a region can start at
-  any point within its source, it is also fairly common to express
-  times as being offset from the start of a region's source.
-\end{itemize}
-
-Figure~\ref{fig:times-with-regions} is an attempt to clarify some of
-these ideas.  Consider this region, thinking of all time intervals as
-being in frames.
-
-\begin{figure}[ht]
-\begin{center}
-%\includegraphics{diagrams/times_with_regions.pdf}
-\end{center}
-\caption{Some expressions of times within Ardour}
-\label{fig:times-with-regions}
-\end{figure}
-
-The figure shows a thick black line to represent session $0$.  We then
-have some event `Fred', whose time can be expressed most simply in
-\emph{session frames} as $f$.  We then have a region, coloured in
-blue.  This has a \emph{position} property, expressed in session
-frames as $p$.  Its source is coloured grey, and we can see that this
-region starts at an interval $s$ into its source (so that the region's
-\emph{start} property is $s$).  If `Fred' is in some way related to
-  this region, we can express its time in new ways: as an offset from
-  the region position, $g$, or as an offset from the source start,
-  $h$.
-
-It goes without saying that confusing any of these representations of
-where `Fred' is will cause problems.
-
 
 
 \end{document}
